@@ -1,0 +1,188 @@
+<?xml version="1.0" ?>
+<sdf version="1.6">
+  <world name="maze_world">
+
+    <!-- 🌞 SUN -->
+    <include>
+      <uri>model://sun</uri>
+    </include>
+
+    <!-- 🌍 GROUND -->
+    <include>
+      <uri>model://ground_plane</uri>
+    </include>
+
+    <!-- ========================= -->
+    <!-- 🎯 GOAL -->
+    <!-- ========================= -->
+    <model name="goal_marker">
+      <static>true</static>
+      <pose>8 8 0.2 0 0 0</pose>
+      <link name="link">
+        <visual name="h">
+          <geometry>
+            <box><size>1 0.1 0.1</size></box>
+          </geometry>
+          <material>
+            <ambient>1 0 0 1</ambient>
+          </material>
+        </visual>
+        <visual name="v">
+          <geometry>
+            <box><size>0.1 1 0.1</size></box>
+          </geometry>
+          <material>
+            <ambient>1 0 0 1</ambient>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ========================= -->
+    <!-- 🧱 MURS EXTÉRIEURS (18x18, centré en 0,0) -->
+    <!-- ========================= -->
+
+    <model name="wall_bottom">
+      <static>true</static>
+      <pose>0 -9 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="c">
+          <geometry><box><size>18.3 0.3 1</size></box></geometry>
+        </collision>
+        <visual name="v">
+          <geometry><box><size>18.3 0.3 1</size></box></geometry>
+        </visual>
+      </link>
+    </model>
+
+    <model name="wall_top">
+      <static>true</static>
+      <pose>0 9 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="c">
+          <geometry><box><size>18.3 0.3 1</size></box></geometry>
+        </collision>
+        <visual name="v">
+          <geometry><box><size>18.3 0.3 1</size></box></geometry>
+        </visual>
+      </link>
+    </model>
+
+    <model name="wall_left">
+      <static>true</static>
+      <pose>-9 0 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="c">
+          <geometry><box><size>0.3 18 1</size></box></geometry>
+        </collision>
+        <visual name="v">
+          <geometry><box><size>0.3 18 1</size></box></geometry>
+        </visual>
+      </link>
+    </model>
+
+    <model name="wall_right">
+      <static>true</static>
+      <pose>9 0 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="c">
+          <geometry><box><size>0.3 18 1</size></box></geometry>
+        </collision>
+        <visual name="v">
+          <geometry><box><size>0.3 18 1</size></box></geometry>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ========================= -->
+    <!-- 🧠 OBSTACLES INTERNES (originaux) -->
+    <!-- ========================= -->
+
+    <model name="obs_1">
+      <static>true</static>
+      <pose>-3 6 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="c">
+          <geometry><box><size>3 0.3 1</size></box></geometry>
+        </collision>
+        <visual name="v">
+          <geometry><box><size>3 0.3 1</size></box></geometry>
+        </visual>
+      </link>
+    </model>
+
+    <model name="obs_2">
+      <static>true</static>
+      <pose>6 6 0.5 0 0 1.57</pose>
+      <link name="link">
+        <collision name="c">
+          <geometry><box><size>3 0.3 1</size></box></geometry>
+        </collision>
+        <visual name="v">
+          <geometry><box><size>3 0.3 1</size></box></geometry>
+        </visual>
+      </link>
+    </model>
+
+
+
+    <model name="obs_4">
+      <static>true</static>
+      <pose>2 2 0.5 0 0 1.57</pose>
+      <link name="link">
+        <collision name="c">
+          <geometry><box><size>3 0.3 1</size></box></geometry>
+        </collision>
+        <visual name="v">
+          <geometry><box><size>3 0.3 1</size></box></geometry>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Obstacle 5 : côté gauche, zone négative x, horizontal -->
+    <model name="obs_5">
+      <static>true</static>
+      <pose>-6 3 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="c">
+          <geometry><box><size>4 0.3 1</size></box></geometry>
+        </collision>
+        <visual name="v">
+          <geometry><box><size>4 0.3 1</size></box></geometry>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Obstacle 6 : bas-gauche, zone négative x et y, vertical -->
+    <model name="obs_6">
+      <static>true</static>
+      <pose>-4 -5 0.5 0 0 1.57</pose>
+      <link name="link">
+        <collision name="c">
+          <geometry><box><size>4 0.3 1</size></box></geometry>
+        </collision>
+        <visual name="v">
+          <geometry><box><size>4 0.3 1</size></box></geometry>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ========================= -->
+    <!-- 🆕 OBSTACLE 7 : zone bas-droite x=4, y=-4 -->
+    <!-- ========================= -->
+
+    <model name="obs_7">
+      <static>true</static>
+      <pose>4 -4 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="c">
+          <geometry><box><size>3.5 0.3 1</size></box></geometry>
+        </collision>
+        <visual name="v">
+          <geometry><box><size>3.5 0.3 1</size></box></geometry>
+        </visual>
+      </link>
+    </model>
+
+  </world>
+</sdf>

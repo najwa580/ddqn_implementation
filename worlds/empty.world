@@ -1,0 +1,51 @@
+<?xml version="1.0" ?>
+<sdf version="1.6">
+  <world name="empty_world">
+
+    <!-- 🌞 SUN -->
+    <include>
+      <uri>model://sun</uri>
+    </include>
+
+    <!-- 🌍 GROUND -->
+    <include>
+      <uri>model://ground_plane</uri>
+    </include>
+
+    <!-- 🎯 GOAL -->
+    <model name="goal_marker">
+      <static>true</static>
+      <pose>-7 -9 0.2 0 0 0</pose>
+
+      <link name="link">
+
+        <visual name="h">
+          <geometry>
+            <box><size>1 0.1 0.1</size></box>
+          </geometry>
+          <material>
+            <ambient>1 0 0 1</ambient>
+          </material>
+        </visual>
+
+        <visual name="v">
+          <geometry>
+            <box><size>0.1 1 0.1</size></box>
+          </geometry>
+          <material>
+            <ambient>1 0 0 1</ambient>
+          </material>
+        </visual>
+
+        <!-- collision minimale -->
+        <collision name="collision">
+          <geometry>
+            <box><size>0.01 0.01 0.01</size></box>
+          </geometry>
+        </collision>
+
+      </link>
+    </model>
+
+  </world>
+</sdf>

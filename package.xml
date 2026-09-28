@@ -1,0 +1,31 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd"
+            schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+
+  <name>my_bot</name>
+  <version>0.0.0</version>
+  <description>Autonomous navigation with Q-Learning</description>
+
+  <maintainer email="le.lay.louis@gmail.com">Louis LE LAY</maintainer>
+  <license>Apache-2.0</license>
+
+  <!-- ✅ PYTHON build tool -->
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <!-- Runtime dependencies -->
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>numpy</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+
+  <!-- Testing -->
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <!-- ✅ IMPORTANT -->
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+
+</package>

@@ -1,0 +1,301 @@
+#!/usr/bin/env python3
+"""
+Lancement :
+    python3 dqn_inference_node.py --ros-args \
+        -p model_path:=/home/eya/robot/dqn_model.pth -p goal_x:=4.0 -p goal_y:=1.0
+"""
+import math
+import threading
+
+import numpy as np
+import rclpy
+import torch
+import torch.nn as nn
+from geometry_msgs.msg import Twist
+from nav_msgs.msg import Odometry
+from rclpy.node import Node
+from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
+from sensor_msgs.msg import LaserScan
+from tf_transformations import euler_from_quaternion
+
+
+class DQN(nn.Module):
+    """Doit avoir exactement la meme architecture que celle de l'entrainement."""
+
+    def __init__(self, state_size=30, action_size=6):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(state_size, 256),
+            nn.ReLU(),
+            nn.Linear(256, 256),
+            nn.ReLU(),
+            nn.Linear(256, action_size),
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
+
+class DQNInferenceNode(Node):
+    # ---- Constantes identiques a robot_env.py ----
+    STATE_SIZE = 30       # architecture du modele : 30-256-256-6
+    ACTION_SIZE = 6
+    SCAN_MAX = 3.5        # portee max utilisee a l'entrainement
+    SCAN_MIN = 0.05       # borne basse utilisee a l'entrainement
+    DIST_NORM = 10.0      # min(dist / 10, 1)
+    VEL_NORM = 0.30       # state[27] = last_linear / 0.30
+    GOAL_DIST = 0.35      # seuil de succes de l'entrainement
+    STEP_PERIOD = 0.12    # duree d'une action a l'entrainement (time.sleep(0.12))
+
+    # Actions : identiques a step() de robot_env.py
+    _ACTIONS = [
+        (0.30, 0.0),    # 0 avance vite
+        (0.15, 0.0),    # 1 avance lentement
+        (0.10, +0.8),   # 2 tourne gauche
+        (0.10, -0.8),   # 3 tourne droite
+        (0.0,  +1.0),   # 4 pivot gauche sur place
+        (0.0,  -1.0),   # 5 pivot droite sur place
+    ]
+
+    # ---- Couche de securite (hors reseau) ----
+    COLLISION_DIST = 0.25     # l'entrainement termine l'episode a 0.20
+    CLEAR_DIST = 0.50         # distance a partir de laquelle on considere le robot degage
+    BACK_FREE_DIST = 0.40     # distance arriere moyenne minimale pour autoriser le recul
+    BACKUP_LINEAR = -0.10
+    BACKUP_ANGULAR = 0.8
+    STUCK_LIMIT = 15          # ~1.8 s de manoeuvre avant de passer en pivot seul
+
+    def __init__(self):
+        super().__init__('dqn_inference_node')
+
+        self.declare_parameter('model_path', '/home/eya/robot/dqn_model.pth')
+        self.declare_parameter('goal_x', 4.0)
+        self.declare_parameter('goal_y', 1.0)
+        self.declare_parameter('use_safety', True)
+
+        model_path = self.get_parameter('model_path').value
+        self.goal_x = float(self.get_parameter('goal_x').value)
+        self.goal_y = float(self.get_parameter('goal_y').value)
+        self.use_safety = bool(self.get_parameter('use_safety').value)
+
+        self.x = 0.0
+        self.y = 0.0
+        self.yaw = 0.0
+        self._last_linear = 0.0
+        self._scan_lock = threading.Lock()
+        self.scan = None
+        self._stuck_counter = 0
+        self._goal_reached = False
+
+        # ---- Modele ----
+        self.device = torch.device('cpu')
+        self.model = DQN(self.STATE_SIZE, self.ACTION_SIZE).to(self.device)
+        checkpoint = torch.load(model_path, map_location=self.device)
+        if isinstance(checkpoint, dict) and 'q_net' in checkpoint:
+            self.model.load_state_dict(checkpoint['q_net'])
+        elif isinstance(checkpoint, dict) and 'state_dict' in checkpoint:
+            self.model.load_state_dict(checkpoint['state_dict'])
+        else:
+            self.model.load_state_dict(checkpoint)
+        self.model.eval()
+        in_dim = self.model.net[0].weight.shape[1]
+        if in_dim != self.STATE_SIZE:
+            raise RuntimeError(f"Dimension d'entree du modele = {in_dim}, attendu {self.STATE_SIZE}")
+        self.get_logger().warn(
+            "Features 28 et 29 : valeurs par defaut (0.0). Remplacez _extra_features() "
+            "par celles utilisees a l'entrainement."
+        )
+        self.get_logger().info(f"Modele charge : {model_path}")
+        self.get_logger().info(f"Goal : ({self.goal_x}, {self.goal_y})")
+
+        # ---- ROS ----
+        qos_sensor = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10,
+        )
+        self.cmd_pub = self.create_publisher(Twist, '/cmd_vel', 10)
+        self.create_subscription(LaserScan, '/scan', self._scan_cb, qos_sensor)
+        self.create_subscription(Odometry, '/odom', self._odom_cb, 10)
+        self.create_timer(self.STEP_PERIOD, self._inference_step)
+        self.get_logger().info("Noeud DQN demarre !")
+
+    # =========================================================
+    # CALLBACKS (meme pretraitement que scan_cb de robot_env)
+    # =========================================================
+    def _scan_cb(self, msg):
+        scan = np.array(msg.ranges, dtype=np.float32)
+        scan = np.nan_to_num(scan, nan=self.SCAN_MAX,
+                             posinf=self.SCAN_MAX, neginf=self.SCAN_MAX)
+        scan = np.clip(scan, self.SCAN_MIN, self.SCAN_MAX)
+        with self._scan_lock:
+            self.scan = scan
+
+    def _odom_cb(self, msg):
+        self.x = msg.pose.pose.position.x
+        self.y = msg.pose.pose.position.y
+        q = msg.pose.pose.orientation
+        _, _, self.yaw = euler_from_quaternion([q.x, q.y, q.z, q.w])
+
+    # =========================================================
+    # GOAL
+    # =========================================================
+    def _distance(self):
+        return math.hypot(self.goal_x - self.x, self.goal_y - self.y)
+
+    def _angle_to_goal(self):
+        angle = math.atan2(self.goal_y - self.y, self.goal_x - self.x)
+        return math.atan2(math.sin(angle - self.yaw), math.cos(angle - self.yaw))
+
+    # =========================================================
+    # FEATURES 28 et 29 : A REMPLACER par celles de l'entrainement
+    # =========================================================
+    def _extra_features(self):
+        # Le robot_env.py fourni ne definit que 28 dimensions, donc ces 2 valeurs
+        # sont inconnues. Exemples possibles (a n'utiliser que si c'est ce que
+        # votre version d'entrainement calculait, avec la meme normalisation) :
+        #   return [self._last_angular / 1.0, 0.0]
+        #   return [self._last_action / 5.0, 0.0]
+        return [0.0, 0.0]
+
+    # =========================================================
+    # ETAT - 30 dimensions (28 de robot_env + 2 features supplementaires)
+    # =========================================================
+    def _get_state(self):
+        with self._scan_lock:
+            if self.scan is None:
+                return None
+            scan = self.scan.copy()
+
+        n = len(scan)
+        center = n // 2
+
+        front = scan[max(0, center - 10):min(n, center + 10)]
+        left = scan[center + 10:center + 50]
+        right = scan[center - 50:center - 10]
+        back = np.concatenate([scan[:20], scan[-20:]])
+
+        front_norm = np.clip(front, self.SCAN_MIN, self.SCAN_MAX) / self.SCAN_MAX
+        if len(front_norm) < 20:  # securite si le scan est trop court
+            front_norm = np.pad(front_norm, (0, 20 - len(front_norm)),
+                                constant_values=1.0)
+        else:
+            front_norm = front_norm[:20]
+
+        def mean_norm(sector):
+            if len(sector) == 0:
+                return 1.0
+            return float(np.mean(np.clip(sector, self.SCAN_MIN, self.SCAN_MAX))) / self.SCAN_MAX
+
+        left_mean = mean_norm(left)
+        right_mean = mean_norm(right)
+        back_mean = mean_norm(back)
+        front_min = float(np.min(front_norm))
+
+        dist = self._distance()
+        angle = self._angle_to_goal()
+
+        state = np.array([
+            *front_norm,                        # 0..19
+            min(dist / self.DIST_NORM, 1.0),    # 20
+            math.cos(angle),                    # 21
+            math.sin(angle),                    # 22
+            front_min,                          # 23
+            left_mean,                          # 24
+            right_mean,                         # 25
+            back_mean,                          # 26
+            self._last_linear / self.VEL_NORM,  # 27 (comme state[27] dans step)
+            *self._extra_features(),            # 28, 29
+        ], dtype=np.float32)
+        assert state.shape[0] == self.STATE_SIZE
+
+        info = {
+            'dist': dist,
+            'front_min_m': front_min * self.SCAN_MAX,
+            'left': left_mean,
+            'right': right_mean,
+            'back_m': back_mean * self.SCAN_MAX,
+        }
+        return state, info
+
+    # =========================================================
+    # BOUCLE PRINCIPALE
+    # =========================================================
+    def _inference_step(self):
+        result = self._get_state()
+        if result is None:
+            self.get_logger().info("En attente de /scan...", throttle_duration_sec=2.0)
+            return
+        state, info = result
+        dist = info['dist']
+        front_m = info['front_min_m']
+
+        # But atteint
+        if dist < self.GOAL_DIST:
+            if not self._goal_reached:
+                self.get_logger().info(f"GOAL ATTEINT ! dist={dist:.2f}m")
+            self._goal_reached = True
+            self._last_linear = 0.0
+            self._publish_cmd(0.0, 0.0)
+            return
+        self._goal_reached = False
+
+        # Securite : collision imminente
+        if self.use_safety and front_m < self.COLLISION_DIST:
+            turn_dir = 1.0 if info['left'] > info['right'] else -1.0
+            back_free = info['back_m'] > self.BACK_FREE_DIST
+
+            if back_free and self._stuck_counter < self.STUCK_LIMIT:
+                linear, angular = self.BACKUP_LINEAR, turn_dir * self.BACKUP_ANGULAR
+                mode = "recul+pivot"
+            else:
+                linear, angular = 0.0, turn_dir * self.BACKUP_ANGULAR
+                mode = "pivot seul"
+
+            self._stuck_counter += 1
+            self._last_linear = max(linear, 0.0)  # le reseau n'a jamais vu de vitesse < 0
+            self._publish_cmd(linear, angular)
+            self.get_logger().warn(
+                f"COLLISION IMMINENTE ({front_m:.2f}m) - {mode} "
+                f"(stuck={self._stuck_counter}, arriere={info['back_m']:.2f}m)"
+            )
+            return
+
+        # Hysteresis : on remet le compteur a zero seulement quand le robot est degage
+        if front_m > self.CLEAR_DIST:
+            self._stuck_counter = 0
+
+        # Navigation normale : le DQN decide seul
+        state_tensor = torch.from_numpy(state).unsqueeze(0).to(self.device)
+        with torch.no_grad():
+            q_values = self.model(state_tensor)
+        action = int(q_values.argmax().item())
+        linear, angular = self._ACTIONS[action]
+        self._last_linear = linear
+        self._publish_cmd(linear, angular)
+        self.get_logger().info(
+            f"Action={action} lin={linear:.2f} ang={angular:.2f} "
+            f"dist={dist:.2f}m front={front_m:.2f}m"
+        )
+
+    def _publish_cmd(self, linear, angular):
+        cmd = Twist()
+        cmd.linear.x = float(linear)
+        cmd.angular.z = float(angular)
+        self.cmd_pub.publish(cmd)
+
+
+def main():
+    rclpy.init()
+    node = DQNInferenceNode()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        node._publish_cmd(0.0, 0.0)
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()
